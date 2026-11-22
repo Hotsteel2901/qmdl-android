@@ -28,10 +28,23 @@ android {
     }
   }
 
+  signingConfigs {
+    val ksPath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/release.jks"
+    if (file(ksPath).exists()) {
+      create("release") {
+        storeFile = file(ksPath)
+        storePassword = System.getenv("STORE_PASSWORD")
+        keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
+        keyPassword = System.getenv("KEY_PASSWORD")
+      }
+    }
+  }
+
   buildTypes {
     release {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
     }
     debug {
       applicationIdSuffix = ".debug"
