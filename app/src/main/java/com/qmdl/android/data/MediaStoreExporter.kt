@@ -10,23 +10,41 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 
 object MediaStoreExporter {
 
-  suspend fun exportAudioBytes(
-    context: Context,
-    fileName: String,
-    bytes: ByteArray,
-  ): String = withContext(Dispatchers.IO) {
-    val mime = when (fileName.substringAfterLast('.', "").lowercase()) {
+  private fun sanitizeFileName(raw: String): String {
+    val cleaned = raw
+      .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
+      .trim()
+      .trim('.')
+    return cleaned.ifEmpty { "qmdl_track_${System.currentTimeMillis()}.mp3" }
+  }
+
+  private fun mimeTypeFor(fileName: String): String =
+    when (fileName.substringAfterLast('.', "").lowercase()) {
       "flac" -> "audio/flac"
       "m4a", "mp4" -> "audio/mp4"
       "wav" -> "audio/wav"
+      "ogg" -> "audio/ogg"
       else -> "audio/mpeg"
     }
+
+  /**
+   * Streaming audio export to system Music/QMDL directory using a 16KB buffer.
+   * Avoids loading 50-100MB lossless FLAC files into a single heap ByteArray (prevents OOM).
+   */
+  suspend fun exportAudioStream(
+    context: Context,
+    fileName: String,
+    input: InputStream,
+  ): String = withContext(Dispatchers.IO) {
+    val safeName = sanitizeFileName(fileName)
+    val mime = mimeTypeFor(safeName)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       val values = ContentValues().apply {
-        put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Audio.Media.DISPLAY_NAME, safeName)
         put(MediaStore.Audio.Media.MIME_TYPE, mime)
         put(MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/QMDL")
         put(MediaStore.Audio.Media.IS_MUSIC, 1)
@@ -36,33 +54,44 @@ object MediaStoreExporter {
       val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
         ?: throw IOException("无法写入系统音乐库")
       try {
-        resolver.openOutputStream(uri)?.use { it.write(bytes) }
-          ?: throw IOException("无法打开输出流")
+        resolver.openOutputStream(uri)?.use { out ->
+          input.copyTo(out, bufferSize = 16 * 1024)
+          out.flush()
+        } ?: throw IOException("无法打开输出流")
         values.clear()
         values.put(MediaStore.Audio.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
       } catch (e: Exception) {
-        resolver.delete(uri, null, null)
+        runCatching { resolver.delete(uri, null, null) }
         throw e
       }
-      "Music/QMDL/$fileName"
+      "Music/QMDL/$safeName"
     } else {
       @Suppress("DEPRECATION")
       val base = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
       val dir = File(base, "QMDL").apply { mkdirs() }
-      val target = File(dir, fileName)
-      target.writeBytes(bytes)
+      val target = File(dir, safeName)
+      target.outputStream().use { out ->
+        input.copyTo(out, bufferSize = 16 * 1024)
+        out.flush()
+      }
       MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(mime), null)
       target.absolutePath
     }
   }
+
+  suspend fun exportAudioBytes(
+    context: Context,
+    fileName: String,
+    bytes: ByteArray,
+  ): String = exportAudioStream(context, fileName, bytes.inputStream())
 
   suspend fun saveQrToGallery(
     context: Context,
     bytes: ByteArray,
     label: String = "qmdl_login_qr",
   ): String = withContext(Dispatchers.IO) {
-    val fileName = "${label}_${System.currentTimeMillis()}.png"
+    val fileName = sanitizeFileName("${label}_${System.currentTimeMillis()}.png")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       val values = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
@@ -80,7 +109,7 @@ object MediaStoreExporter {
         values.put(MediaStore.Images.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
       } catch (e: Exception) {
-        resolver.delete(uri, null, null)
+        runCatching { resolver.delete(uri, null, null) }
         throw e
       }
       "Pictures/QMDL/$fileName"

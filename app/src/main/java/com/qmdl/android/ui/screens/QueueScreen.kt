@@ -12,13 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CleaningServices
@@ -26,19 +23,13 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,79 +40,156 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.qmdl.android.data.JobItem
 import com.qmdl.android.data.formatBytes
 import com.qmdl.android.data.formatSpeed
+import com.qmdl.android.ui.liquid.LiquidGlassButton
+import com.qmdl.android.ui.liquid.LiquidGlassCard
+import com.qmdl.android.ui.liquid.LiquidGlassChip
+import com.qmdl.android.ui.liquid.LiquidGlassProgressBar
 import com.qmdl.android.viewmodel.MainUiState
+import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun QueueScreen(
   state: MainUiState,
   onFilterChange: (String) -> Unit,
   onCancel: (Long) -> Unit,
   onRetry: (Long) -> Unit,
+  onRetryAllFailed: () -> Unit,
   onDelete: (Long) -> Unit,
   onPlay: (JobItem) -> Unit,
   onExport: (JobItem) -> Unit,
   onClearFinished: () -> Unit,
 ) {
-  var logDialogJob by remember { mutableStateOf<JobItem?>(null) }
-  val activeCount = state.jobs.count { it.isActive }
-  val filtered = state.jobs.filter { j ->
+  var logsJob by remember { mutableStateOf<JobItem?>(null) }
+
+  val activeCount = remember(state.jobs) { state.jobs.count { it.isActive } }
+  val doneCount = remember(state.jobs) { state.jobs.count { it.status == "done" } }
+  val failedCount = remember(state.jobs) { state.jobs.count { it.canRetry } }
+
+  val filtered = remember(state.jobs, state.queueFilter) {
     when (state.queueFilter) {
-      "active" -> j.isActive
-      "done" -> j.status == "done"
-      "failed" -> j.status == "failed" || j.status == "cancelled"
-      else -> true
+      "active" -> state.jobs.filter { it.isActive }
+      "done" -> state.jobs.filter { it.status == "done" }
+      "failed" -> state.jobs.filter { it.canRetry }
+      else -> state.jobs
     }
   }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 185.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
+    // Header
     item {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
           Text("下载队列", style = MaterialTheme.typography.headlineMedium)
           Text(
-            text = if (state.jobs.isEmpty()) "暂无任务"
-            else "进行中 $activeCount · 共 ${state.jobs.size} 个任务",
+            if (activeCount > 0) "正在高速下载 $activeCount 首音频"
+            else "共 ${state.jobs.size} 个任务记录",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
-        FilledTonalButton(
-          onClick = onClearFinished,
-          enabled = state.jobs.any { !it.isActive },
-          shape = CircleShape,
-        ) {
-          Icon(Icons.Rounded.CleaningServices, null, modifier = Modifier.size(18.dp))
-          Spacer(Modifier.width(6.dp))
-          Text("清理已结束")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          if (failedCount > 0) {
+            LiquidGlassButton(
+              onClick = onRetryAllFailed,
+              tint = MaterialTheme.colorScheme.tertiary,
+              height = 38.dp,
+              horizontalPadding = 12.dp,
+            ) {
+              Icon(Icons.Rounded.Refresh, null, tint = Color.White, modifier = Modifier.size(16.dp))
+              Text("重试失败", color = Color.White, style = MaterialTheme.typography.labelMedium)
+            }
+          }
+          LiquidGlassButton(
+            onClick = onClearFinished,
+            enabled = doneCount + failedCount > 0,
+            height = 38.dp,
+            horizontalPadding = 12.dp,
+          ) {
+            Icon(Icons.Rounded.CleaningServices, null, modifier = Modifier.size(16.dp))
+            Text("清理", style = MaterialTheme.typography.labelMedium)
+          }
         }
       }
     }
 
+    // Liquid Glass Summary Metrics Card
     item {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("all" to "全部", "active" to "进行中", "done" to "已完成", "failed" to "失败").forEach { (key, label) ->
-          FilterChip(
-            selected = state.queueFilter == key,
-            onClick = { onFilterChange(key) },
-            label = { Text(label) },
-            shape = CircleShape,
+      LiquidGlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = 24.dp,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+          QueueStatColumn(
+            label = "进行中",
+            count = activeCount,
+            accent = MaterialTheme.colorScheme.primary,
+          )
+          QueueStatColumn(
+            label = "已完成",
+            count = doneCount,
+            accent = MaterialTheme.colorScheme.secondary,
+          )
+          QueueStatColumn(
+            label = "失败/取消",
+            count = failedCount,
+            accent = if (failedCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+    }
+
+    // Filter Pills
+    item {
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+          LiquidGlassChip(
+            label = "全部 (${state.jobs.size})",
+            selected = state.queueFilter == "all",
+            onClick = { onFilterChange("all") },
+          )
+        }
+        item {
+          LiquidGlassChip(
+            label = "进行中 ($activeCount)",
+            selected = state.queueFilter == "active",
+            onClick = { onFilterChange("active") },
+          )
+        }
+        item {
+          LiquidGlassChip(
+            label = "已完成 ($doneCount)",
+            selected = state.queueFilter == "done",
+            onClick = { onFilterChange("done") },
+          )
+        }
+        item {
+          LiquidGlassChip(
+            label = "失败 ($failedCount)",
+            selected = state.queueFilter == "failed",
+            onClick = { onFilterChange("failed") },
           )
         }
       }
@@ -129,21 +197,25 @@ fun QueueScreen(
 
     if (filtered.isEmpty()) {
       item {
-        Card(
+        LiquidGlassCard(
           modifier = Modifier.fillMaxWidth(),
-          shape = MaterialTheme.shapes.extraLarge,
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+          cornerRadius = 28.dp,
+          contentPadding = PaddingValues(vertical = 40.dp, horizontal = 22.dp),
         ) {
           Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(vertical = 42.dp, horizontal = 20.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            Text("当前筛选下没有任务", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
+            Icon(
+              Icons.Rounded.QueueMusic,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+              modifier = Modifier.size(44.dp),
+            )
+            Text("当前分类下没有任务", style = MaterialTheme.typography.titleMedium)
             Text(
-              "在「探索」页搜索歌曲并点击下载即可加入队列",
+              "在「探索」页搜索并点选歌曲后，下载进度、实时速率与预计剩余时间会显示在这里",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -151,8 +223,9 @@ fun QueueScreen(
         }
       }
     } else {
-      items(filtered, key = { it.id }) { job ->
-        JobExpressiveCard(
+      // Collision-proof composite key
+      itemsIndexed(filtered, key = { idx, j -> "${j.id}_$idx" }) { _, job ->
+        JobLiquidCard(
           job = job,
           baseUrl = state.baseUrl,
           onCancel = { onCancel(job.id) },
@@ -160,44 +233,69 @@ fun QueueScreen(
           onDelete = { onDelete(job.id) },
           onPlay = { onPlay(job) },
           onExport = { onExport(job) },
-          onShowLogs = { logDialogJob = job },
+          onShowLogs = { logsJob = job },
         )
       }
     }
-
-    item { Spacer(Modifier.height(84.dp)) }
   }
 
-  logDialogJob?.let { job ->
+  logsJob?.let { job ->
     AlertDialog(
-      onDismissRequest = { logDialogJob = null },
-      title = { Text("${job.name} · 日志") },
+      onDismissRequest = { logsJob = null },
+      title = { Text("任务详情 · ${job.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
       text = {
-        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            "状态：${job.statusText()} · 音质：${job.qualityLabel} · 来源：${job.source.ifBlank { "默认" }}",
+            style = MaterialTheme.typography.labelMedium,
+          )
           if (!job.error.isNullOrBlank()) {
             Text(
-              job.error,
-              color = MaterialTheme.colorScheme.error,
+              "错误：${job.error}",
               style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.error,
             )
-            Spacer(Modifier.height(8.dp))
           }
-          Text(
-            text = job.messages.ifEmpty { listOf("（暂无日志）") }.joinToString("\n"),
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-          )
+          if (job.messages.isNotEmpty()) {
+            Text(
+              job.messages.joinToString("\n"),
+              style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.5.sp),
+            )
+          } else {
+            Text("暂无更多日志输出", style = MaterialTheme.typography.bodySmall)
+          }
         }
       },
       confirmButton = {
-        TextButton(onClick = { logDialogJob = null }) { Text("关闭") }
+        TextButton(onClick = { logsJob = null }) { Text("关闭") }
       },
     )
   }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun JobExpressiveCard(
+private fun QueueStatColumn(
+  label: String,
+  count: Int,
+  accent: Color,
+) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Text(
+      text = "$count",
+      style = MaterialTheme.typography.titleLarge,
+      fontWeight = FontWeight.ExtraBold,
+      color = accent,
+    )
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+@Composable
+private fun JobLiquidCard(
   job: JobItem,
   baseUrl: String,
   onCancel: () -> Unit,
@@ -207,36 +305,34 @@ private fun JobExpressiveCard(
   onExport: () -> Unit,
   onShowLogs: () -> Unit,
 ) {
-  Card(
+  val statusColor = when (job.status) {
+    "done" -> MaterialTheme.colorScheme.primary
+    "failed" -> MaterialTheme.colorScheme.error
+    "cancelled" -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> MaterialTheme.colorScheme.secondary
+  }
+  val cover = job.resolvedCover(baseUrl)
+
+  LiquidGlassCard(
     modifier = Modifier.fillMaxWidth(),
-    shape = MaterialTheme.shapes.large,
-    colors = CardDefaults.cardColors(
-      containerColor = when (job.status) {
-        "failed" -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.28f)
-        "downloading" -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.24f)
-        else -> MaterialTheme.colorScheme.surfaceContainer
-      },
-    ),
+    cornerRadius = 22.dp,
+    tint = if (job.status == "failed") MaterialTheme.colorScheme.error else Color.Unspecified,
+    contentPadding = PaddingValues(13.dp),
   ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(14.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
       ) {
         Box(
           modifier = Modifier
-            .size(46.dp)
+            .size(48.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
           contentAlignment = Alignment.Center,
         ) {
-          val cover = job.resolvedCover(baseUrl)
-          if (cover != null) {
+          if (!cover.isNullOrBlank()) {
             AsyncImage(
               model = cover,
               contentDescription = null,
@@ -244,130 +340,198 @@ private fun JobExpressiveCard(
               modifier = Modifier.fillMaxSize(),
             )
           } else {
-            Icon(Icons.Rounded.MusicNote, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
           }
         }
-        Column(modifier = Modifier.weight(1f)) {
+
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text(
-            job.name,
+            text = job.name,
             style = MaterialTheme.typography.titleMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
-          Text(
-            listOf(job.artist, job.qualityLabel + if (job.preview) " 试听" else "", job.source)
-              .filter { it.isNotBlank() }
-              .joinToString(" · "),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            Text(
+              text = job.statusText(),
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = statusColor,
+              modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(statusColor.copy(alpha = 0.16f))
+                .padding(horizontal = 6.dp, vertical = 1.dp),
+            )
+            Text(
+              text = "${job.artist} · ${job.qualityLabel}" + if (job.preview) " (试听)" else "",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
         }
-        Surface(
-          shape = CircleShape,
-          color = when (job.status) {
-            "done", "downloading" -> MaterialTheme.colorScheme.primaryContainer
-            "failed" -> MaterialTheme.colorScheme.errorContainer
-            else -> MaterialTheme.colorScheme.surfaceContainerHighest
-          },
-        ) {
-          Text(
-            job.statusText(),
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall,
+
+        IconButton(onClick = onShowLogs, modifier = Modifier.size(34.dp)) {
+          Icon(
+            Icons.Rounded.Terminal,
+            contentDescription = "查看日志",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
           )
         }
       }
 
-      // Expressive Wavy Progress Bar for active downloads
+      // Active Progress + Speed + Humanized ETA
       if (job.isActive) {
         val ratio = job.progressRatio
-        if (ratio != null && job.total > 0) {
-          LinearWavyProgressIndicator(
-            progress = { ratio },
-            modifier = Modifier.fillMaxWidth(),
-          )
-        } else {
-          LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-      }
+        LiquidGlassProgressBar(progress = ratio, modifier = Modifier.fillMaxWidth())
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Text(
-          text = job.error?.lines()?.firstOrNull() ?: job.stage,
-          style = MaterialTheme.typography.bodySmall,
-          color = if (job.status == "failed") MaterialTheme.colorScheme.error
-          else MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        val metrics = buildList {
-          if (job.total > 0) {
-            add("${formatBytes(job.downloaded)} / ${formatBytes(job.total)}")
-          } else if (job.downloaded > 0) {
-            add(formatBytes(job.downloaded))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          val leftInfo = buildString {
+            if (ratio != null) append("${(ratio * 100f).roundToInt()}%")
+            else append(job.stage.ifBlank { job.statusText() })
+            if (job.total > 0) {
+              append(" · ${formatBytes(job.downloaded)} / ${formatBytes(job.total)}")
+            } else if (job.downloaded > 0) {
+              append(" · ${formatBytes(job.downloaded)}")
+            }
           }
-          val spd = formatSpeed(job.speed)
-          if (spd.isNotEmpty() && job.isActive) add(spd)
-          job.verified?.let { add("%.0fs ✓".format(it)) }
-        }.joinToString(" · ")
-        if (metrics.isNotEmpty()) {
+          val rightInfo = buildString {
+            val spd = formatSpeed(job.speed)
+            if (spd.isNotEmpty()) append(spd)
+            val eta = formatEta(job.downloaded, job.total, job.speed)
+            if (eta.isNotEmpty()) {
+              if (isNotEmpty()) append(" · ")
+              append(eta)
+            }
+          }
           Text(
-            text = metrics,
+            text = leftInfo,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
+          if (rightInfo.isNotEmpty()) {
+            Text(
+              text = rightInfo,
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.SemiBold,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
         }
       }
 
+      // Friendly Error Explanation
+      if (!job.error.isNullOrBlank()) {
+        val hint = humanizeJobError(job.error)
+        Text(
+          text = hint,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+
+      // Action Bar
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        if (job.status == "done") {
+          if (job.verified != null && job.verified > 0) {
+            Text(
+              text = "时长校验通过 · ${job.verified.roundToInt()}s",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.weight(1f),
+            )
+          }
+          LiquidGlassButton(
+            onClick = onPlay,
+            tint = MaterialTheme.colorScheme.primary,
+            height = 34.dp,
+            horizontalPadding = 12.dp,
+          ) {
+            Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Text("播放", color = Color.White, style = MaterialTheme.typography.labelMedium)
+          }
+          LiquidGlassButton(
+            onClick = onExport,
+            height = 34.dp,
+            horizontalPadding = 12.dp,
+          ) {
+            Icon(Icons.Rounded.FileUpload, null, modifier = Modifier.size(16.dp))
+            Text("导出", style = MaterialTheme.typography.labelMedium)
+          }
+        }
+
         if (job.canCancel) {
-          TextButton(onClick = onCancel) {
-            Icon(Icons.Rounded.Cancel, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("取消")
+          LiquidGlassButton(
+            onClick = onCancel,
+            height = 34.dp,
+            horizontalPadding = 12.dp,
+          ) {
+            Icon(Icons.Rounded.Cancel, null, modifier = Modifier.size(16.dp))
+            Text("取消", style = MaterialTheme.typography.labelMedium)
           }
         }
-        if (job.status == "done" && !job.path.isNullOrBlank()) {
-          FilledTonalButton(onClick = onPlay, shape = CircleShape) {
-            Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("播放")
-          }
-          TextButton(onClick = onExport) {
-            Icon(Icons.Rounded.FileUpload, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("导出音乐库")
-          }
-        }
+
         if (job.canRetry) {
-          FilledTonalButton(onClick = onRetry, shape = CircleShape) {
-            Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("重试")
+          LiquidGlassButton(
+            onClick = onRetry,
+            tint = MaterialTheme.colorScheme.primary,
+            height = 34.dp,
+            horizontalPadding = 12.dp,
+          ) {
+            Icon(Icons.Rounded.Refresh, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Text("重试", color = Color.White, style = MaterialTheme.typography.labelMedium)
           }
         }
-        Spacer(Modifier.weight(1f))
-        IconButton(onClick = onShowLogs) {
-          Icon(Icons.Rounded.Terminal, contentDescription = "查看日志")
-        }
+
         if (!job.isActive) {
-          IconButton(onClick = onDelete) {
-            Icon(Icons.Rounded.DeleteOutline, contentDescription = "移除")
+          IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+            Icon(
+              Icons.Rounded.DeleteOutline,
+              contentDescription = "删除记录",
+              tint = MaterialTheme.colorScheme.error,
+              modifier = Modifier.size(18.dp),
+            )
           }
         }
       }
     }
+  }
+}
+
+private fun formatEta(downloaded: Long, total: Long, speedBytesPerSec: Double): String {
+  if (total <= 0L || downloaded >= total || !speedBytesPerSec.isFinite() || speedBytesPerSec < 1024.0) {
+    return ""
+  }
+  val remainingSec = ((total - downloaded) / speedBytesPerSec).roundToInt().coerceAtLeast(1)
+  return when {
+    remainingSec < 60 -> "剩余约 ${remainingSec}秒"
+    remainingSec < 3600 -> "剩余约 ${remainingSec / 60}分${remainingSec % 60}秒"
+    else -> "剩余约 ${remainingSec / 3600}小时"
+  }
+}
+
+private fun humanizeJobError(raw: String): String {
+  val lower = raw.lowercase()
+  return when {
+    "cookie" in lower || "vip" in lower || "403" in lower ->
+      "音源受限：$raw（建议在「设置」中登录账号或开启镜像源）"
+    "timeout" in lower || "connection" in lower ->
+      "网络波动导致下载中断，可点击重试恢复"
+    else -> raw
   }
 }

@@ -16,6 +16,7 @@ import com.qmdl.android.data.ResolveResult
 import com.qmdl.android.data.SongItem
 import com.qmdl.android.data.ThemeMode
 import com.qmdl.android.player.PlayTrack
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Collections
 
 data class MainUiState(
   val backendStatus: BackendStatus = BackendStatus.Starting,
@@ -72,6 +74,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   val backendManager = app.backendManager
   val player = app.playerController
 
+  private val coroutineErrorHandler = CoroutineExceptionHandler { _, throwable ->
+    notify("操作异常: ${throwable.message ?: "未知错误"}")
+  }
+
   private val _ui = MutableStateFlow(
     MainUiState(
       searchHistory = prefs.searchHistory(),
@@ -93,10 +99,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   val toast: SharedFlow<String> = _toast.asSharedFlow()
 
   private var loginPollJob: Job? = null
-  private val exportedJobIds = mutableSetOf<Long>()
+  private val exportedJobIds: MutableSet<Long> = Collections.synchronizedSet(mutableSetOf())
 
   init {
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       backendManager.status.collect { st ->
         val url = when (st) {
           is BackendStatus.LocalRunning -> st.baseUrl
@@ -106,23 +112,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(backendStatus = st, baseUrl = url) }
         if (url.isNotEmpty()) {
           refreshHealth()
-          refreshJobs()
+          refreshJobs(silent = true)
           refreshLibrary()
         }
       }
     }
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       backendManager.logs.collect { lines ->
         _ui.update { it.copy(backendLogs = lines) }
       }
     }
-    viewModelScope.launch {
+    // Serialized polling loop: awaits each refresh before sleeping so HTTP polls never stack up
+    viewModelScope.launch(coroutineErrorHandler) {
       while (isActive) {
         val url = _ui.value.baseUrl
         if (url.isNotEmpty()) {
-          refreshJobs(silent = true)
+          refreshJobsInternal(url = url, silent = true)
         }
-        delay(1200)
+        delay(1500)
       }
     }
   }
@@ -150,7 +157,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     if (q.contains("/songDetail/") || q.contains("songmid=")) {
       val hist = prefs.pushSearchHistory(q)
       _ui.update { it.copy(query = q, searchHistory = hist) }
-      viewModelScope.launch {
+      viewModelScope.launch(coroutineErrorHandler) {
         runCatching {
           val st = _ui.value
           api.enqueueRaw(
@@ -176,7 +183,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         selectedMids = emptySet(),
       )
     }
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
         api.search(url, q, limit = 25, page = page)
       }.onSuccess { resp ->
@@ -223,7 +230,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val url = _ui.value.baseUrl
     if (url.isEmpty() || songs.isEmpty()) return
     val st = _ui.value
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
         api.enqueue(
           baseUrl = url,
@@ -262,7 +269,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         resolveError = null,
       )
     }
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
         api.resolveStream(
           baseUrl = url,
@@ -291,7 +298,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun refreshHealth() {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.health(url) }
         .onSuccess { info -> _ui.update { it.copy(health = info) } }
     }
@@ -300,37 +307,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun refreshJobs(silent: Boolean = false) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
-      runCatching { api.jobs(url) }
-        .onSuccess { list ->
-          val prevMap = _ui.value.jobs.associateBy { it.id }
-          var newlyDone = false
-          for (job in list) {
-            val prev = prevMap[job.id]
-            if (prev != null && prev.status != job.status && job.status == "done") {
-              newlyDone = true
-              notify("下载完成：${job.name}")
-              if (_ui.value.autoExportMediaStore && exportedJobIds.add(job.id)) {
-                exportJobToMusic(job)
-              }
+    viewModelScope.launch(coroutineErrorHandler) {
+      refreshJobsInternal(url = url, silent = silent)
+    }
+  }
+
+  private suspend fun refreshJobsInternal(url: String, silent: Boolean) {
+    runCatching { api.jobs(url) }
+      .onSuccess { list ->
+        val prevMap = _ui.value.jobs.associateBy { it.id }
+        var newlyDone = false
+        for (job in list) {
+          val prev = prevMap[job.id]
+          if (prev != null && prev.status != job.status && job.status == "done") {
+            newlyDone = true
+            notify("下载完成：${job.name}")
+            if (_ui.value.autoExportMediaStore && exportedJobIds.add(job.id)) {
+              exportJobToMusic(job)
             }
           }
-          _ui.update { it.copy(jobs = list) }
-          if (newlyDone) {
-            refreshLibrary()
-            refreshHealth()
-          }
         }
-        .onFailure { e ->
-          if (!silent) notify("获取队列失败: ${e.message}")
+        _ui.update { it.copy(jobs = list) }
+        if (newlyDone) {
+          refreshLibrary()
+          refreshHealth()
         }
-    }
+      }
+      .onFailure { e ->
+        if (!silent) notify("获取队列失败: ${e.message}")
+      }
   }
 
   fun cancelJob(id: Long) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.cancelJob(url, id) }
         .onSuccess { refreshJobs() }
         .onFailure { notify("取消失败: ${it.message}") }
@@ -340,7 +351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun retryJob(id: Long) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.retryJob(url, id) }
         .onSuccess {
           notify("已重新入队")
@@ -350,10 +361,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
+  fun retryAllFailedJobs() {
+    val url = _ui.value.baseUrl
+    if (url.isEmpty()) return
+    val failedIds = _ui.value.jobs
+      .filter { it.canRetry }
+      .map { it.id }
+    if (failedIds.isEmpty()) {
+      notify("没有需要重试的任务")
+      return
+    }
+    viewModelScope.launch(coroutineErrorHandler) {
+      var retried = 0
+      for (id in failedIds) {
+        if (runCatching { api.retryJob(url, id) }.isSuccess) {
+          retried++
+        }
+      }
+      notify("已重新提交 $retried 个失败任务")
+      refreshJobs()
+    }
+  }
+
   fun deleteJob(id: Long) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.deleteJob(url, id) }
         .onSuccess { refreshJobs() }
         .onFailure { notify("移除失败: ${it.message}") }
@@ -363,10 +396,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun clearFinishedJobs() {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.clearFinishedJobs(url) }
         .onSuccess { n ->
-          notify(if (n > 0) "已清理 $n 个任务" else "没有可清理的任务")
+          notify(if (n > 0) "已清理 $n 个已结束任务" else "没有可清理的任务")
           refreshJobs()
         }
         .onFailure { notify("清理失败: ${it.message}") }
@@ -377,7 +410,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
     _ui.update { it.copy(libraryLoading = true) }
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.library(url) }
         .onSuccess { resp ->
           _ui.update {
@@ -397,7 +430,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun deleteLibraryFile(file: LibraryFile) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.deleteLibraryFile(url, file.name) }
         .onSuccess {
           notify("已删除：${file.title}")
@@ -411,11 +444,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun exportLibraryFileToMusic(file: LibraryFile) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
-      notify("正在导出到系统音乐库…")
+    viewModelScope.launch(coroutineErrorHandler) {
+      notify("正在流式导出到系统音乐库…")
       runCatching {
-        val bytes = api.downloadBytes(file.fullStreamUrl(url))
-        MediaStoreExporter.exportAudioBytes(app, file.name, bytes)
+        api.streamTo(file.fullStreamUrl(url)) { input ->
+          MediaStoreExporter.exportAudioStream(app, file.name, input)
+        }
       }.onSuccess { dest ->
         notify("已导出：$dest")
       }.onFailure { e ->
@@ -428,10 +462,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val url = _ui.value.baseUrl
     val fileName = job.fileName ?: "${job.artist} - ${job.name}.mp3"
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
-        val bytes = api.downloadBytes("$url/api/jobs/${job.id}/file?download=1")
-        MediaStoreExporter.exportAudioBytes(app, fileName, bytes)
+        api.streamTo("$url/api/jobs/${job.id}/file?download=1") { input ->
+          MediaStoreExporter.exportAudioStream(app, fileName, input)
+        }
       }.onSuccess { dest ->
         notify("已导出到系统音乐：$dest")
       }.onFailure { e ->
@@ -488,7 +523,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
     val kind = _ui.value.loginKind
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.startLogin(url, kind) }
         .onSuccess {
           startLoginPolling()
@@ -502,7 +537,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun cancelQrLogin() {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.cancelLogin(url) }
       pollLoginOnce()
     }
@@ -510,7 +545,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
   fun startLoginPolling() {
     loginPollJob?.cancel()
-    loginPollJob = viewModelScope.launch {
+    loginPollJob = viewModelScope.launch(coroutineErrorHandler) {
       while (isActive) {
         val st = pollLoginOnce()
         if (st != null && !st.running) {
@@ -540,7 +575,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
   fun saveQrImageToGallery() {
     val qrUrl = _ui.value.loginStatus.fullQrUrl(_ui.value.baseUrl) ?: return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
         val bytes = api.downloadBytes(qrUrl)
         MediaStoreExporter.saveQrToGallery(app, bytes, "qmdl_${_ui.value.loginKind}")
@@ -555,7 +590,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun saveCookie(cookie: String) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.saveCookie(url, cookie) }
         .onSuccess { auth ->
           notify("Cookie 已生效（${auth.uin}）")
@@ -568,7 +603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun logout() {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching { api.logout(url) }
         .onSuccess {
           notify("已退出登录，恢复匿名模式")
@@ -611,7 +646,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
   fun setBridgeUrl(bridge: String) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
         api.updateConfig(url, bridge = bridge, updateBridge = true)
       }.onSuccess {
@@ -667,7 +702,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val url = _ui.value.baseUrl
     if (url.isEmpty()) return
     val st = _ui.value
-    viewModelScope.launch {
+    viewModelScope.launch(coroutineErrorHandler) {
       runCatching {
         api.updateConfig(
           baseUrl = url,

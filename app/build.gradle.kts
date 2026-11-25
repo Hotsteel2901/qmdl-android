@@ -11,8 +11,8 @@ android {
     applicationId = "com.qmdl.android"
     minSdk = 26
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0.0"
+    versionCode = 2
+    versionName = "2.0.0"
 
     vectorDrawables.useSupportLibrary = true
     ndk {
@@ -76,6 +76,8 @@ dependencies {
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.material.icons.extended)
+  implementation(libs.kyant.backdrop)
+  implementation(libs.kyant.shapes)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)

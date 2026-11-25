@@ -2,10 +2,9 @@ package com.qmdl.android.ui.screens
 
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,51 +17,43 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SelectAll
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,9 +63,14 @@ import com.qmdl.android.backend.BackendStatus
 import com.qmdl.android.data.QualityOption
 import com.qmdl.android.data.SongItem
 import com.qmdl.android.data.formatBytes
+import com.qmdl.android.ui.liquid.LiquidGlassButton
+import com.qmdl.android.ui.liquid.LiquidGlassCard
+import com.qmdl.android.ui.liquid.LiquidGlassChip
+import com.qmdl.android.ui.liquid.LiquidGlassSpinner
+import com.qmdl.android.ui.liquid.LiquidGlassTextField
+import com.qmdl.android.ui.liquid.LocalLiquidDark
 import com.qmdl.android.viewmodel.MainUiState
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun DiscoverScreen(
   state: MainUiState,
@@ -90,115 +86,79 @@ fun DiscoverScreen(
   onPlayResolved: () -> Unit,
   onOpenAccount: () -> Unit,
 ) {
-  val keyboard = LocalSoftwareKeyboardController.current
   val context = LocalContext.current
+  val keyboard = LocalSoftwareKeyboardController.current
+  val isDark = LocalLiquidDark.current
 
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 190.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    // Expressive Hero Header
+    // Header + Engine / Account Pill
     item {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column {
-          Text(
-            text = "QMDL 音乐",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-          )
-          Text(
-            text = when (state.backendStatus) {
-              is BackendStatus.LocalRunning -> "内置 CLI 引擎运行中"
-              is BackendStatus.RemoteConnected -> "已连接远程服务端"
-              is BackendStatus.Starting -> "正在启动内置引擎…"
-              is BackendStatus.Error -> "引擎未就绪"
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        val loggedIn = state.health?.auth?.loggedIn == true
-        Surface(
-          onClick = onOpenAccount,
-          shape = CircleShape,
-          color = if (loggedIn) MaterialTheme.colorScheme.primaryContainer
-          else MaterialTheme.colorScheme.surfaceContainerHigh,
-        ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("QMDL 音乐", style = MaterialTheme.typography.headlineMedium)
+          val statusLine = when (val st = state.backendStatus) {
+            is BackendStatus.Starting -> "内置引擎启动中…"
+            is BackendStatus.LocalRunning -> "内置引擎就绪 · 端口 ${st.port}"
+            is BackendStatus.RemoteConnected -> "远程服务已连接"
+            is BackendStatus.Error -> "引擎异常，请前往设置查看"
+          }
+          val statusColor = when (state.backendStatus) {
+            is BackendStatus.LocalRunning, is BackendStatus.RemoteConnected -> MaterialTheme.colorScheme.primary
+            is BackendStatus.Error -> MaterialTheme.colorScheme.error
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+          }
           Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             Box(
               modifier = Modifier
-                .size(8.dp)
+                .size(7.dp)
                 .clip(CircleShape)
-                .background(
-                  if (loggedIn) MaterialTheme.colorScheme.primary
-                  else MaterialTheme.colorScheme.tertiary,
-                ),
+                .background(statusColor),
             )
             Text(
-              text = if (loggedIn) "已登录" else "匿名模式",
-              style = MaterialTheme.typography.labelLarge,
-              color = if (loggedIn) MaterialTheme.colorScheme.onPrimaryContainer
-              else MaterialTheme.colorScheme.onSurfaceVariant,
+              text = statusLine,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
             )
           }
         }
+
+        val auth = state.health?.auth
+        val accountLabel = if (auth?.loggedIn == true) {
+          auth.uin.ifBlank { "已登录" }
+        } else {
+          "匿名 · 登录"
+        }
+        LiquidGlassChip(
+          label = accountLabel,
+          selected = auth?.loggedIn == true,
+          onClick = onOpenAccount,
+          leading = {
+            Icon(
+              Icons.Rounded.AccountCircle,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+              tint = if (auth?.loggedIn == true) MaterialTheme.colorScheme.primary
+              else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          },
+        )
       }
     }
 
-    // Expressive Pill Search Bar
-    item {
-      OutlinedTextField(
-        value = state.query,
-        onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth(),
-        shape = CircleShape,
-        singleLine = true,
-        placeholder = { Text("搜索歌名 / 歌手，或粘贴 QQ 音乐链接") },
-        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-        trailingIcon = {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            if (state.query.isNotEmpty()) {
-              IconButton(onClick = { onQueryChange("") }) {
-                Icon(Icons.Rounded.Close, contentDescription = "清空")
-              }
-            }
-            FilledTonalIconButton(
-              onClick = {
-                keyboard?.hide()
-                onSearch(null, 1)
-              },
-              modifier = Modifier.padding(end = 4.dp),
-            ) {
-              Icon(Icons.Rounded.Search, contentDescription = "搜索")
-            }
-          }
-        },
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(
-          onSearch = {
-            keyboard?.hide()
-            onSearch(null, 1)
-          },
-        ),
-        colors = OutlinedTextFieldDefaults.colors(
-          focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-          unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-          focusedBorderColor = MaterialTheme.colorScheme.primary,
-          unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-        ),
-      )
-    }
-
-    // Quick Quality Picker + History Chips
+    // Liquid Glass Search Bar + Paste Link + Search Button
     item {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -206,380 +166,569 @@ fun DiscoverScreen(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          QualityOption.entries.forEach { q ->
-            FilterChip(
-              selected = state.quality == q,
-              onClick = { onQualityChange(q) },
-              label = { Text(q.label) },
-              shape = CircleShape,
-            )
+          LiquidGlassTextField(
+            value = state.query,
+            onValueChange = onQueryChange,
+            placeholder = "搜索歌名、歌手，或粘贴 QQ 音乐链接…",
+            modifier = Modifier.weight(1f),
+            leading = {
+              Icon(
+                Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            },
+            trailing = {
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state.query.isNotEmpty()) {
+                  IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Rounded.Clear, contentDescription = "清空", modifier = Modifier.size(17.dp))
+                  }
+                } else {
+                  IconButton(
+                    onClick = {
+                      val cm = context.getSystemService(ClipboardManager::class.java)
+                      val clip = cm?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
+                      if (!clip.isNullOrEmpty()) {
+                        onQueryChange(clip)
+                        onSearch(clip, 1)
+                      } else {
+                        Toast.makeText(context, "剪贴板为空", Toast.LENGTH_SHORT).show()
+                      }
+                    },
+                    modifier = Modifier.size(28.dp),
+                  ) {
+                    Icon(
+                      Icons.Rounded.ContentPaste,
+                      contentDescription = "粘贴并搜索",
+                      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier.size(17.dp),
+                    )
+                  }
+                }
+              }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+              onSearch = {
+                keyboard?.hide()
+                onSearch(null, 1)
+              },
+            ),
+          )
+
+          LiquidGlassButton(
+            onClick = {
+              keyboard?.hide()
+              onSearch(null, 1)
+            },
+            tint = MaterialTheme.colorScheme.primary,
+            height = 46.dp,
+            horizontalPadding = 16.dp,
+          ) {
+            Text("搜索", color = Color.White, style = MaterialTheme.typography.labelLarge)
           }
         }
 
-        if (state.searchHistory.isNotEmpty()) {
-          LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // Quality Selector Chips
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          items(QualityOption.entries) { opt ->
+            LiquidGlassChip(
+              label = opt.label,
+              selected = state.quality == opt,
+              onClick = { onQualityChange(opt) },
+              leading = if (opt == QualityOption.FLAC) {
+                {
+                  Icon(
+                    Icons.Rounded.GraphicEq,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp),
+                    tint = if (state.quality == opt) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.tertiary,
+                  )
+                }
+              } else null,
+            )
+          }
+        }
+      }
+    }
+
+    // Recent Search History
+    if (state.searchHistory.isNotEmpty() && state.songs.isEmpty() && !state.searching) {
+      item {
+        LiquidGlassCard(
+          modifier = Modifier.fillMaxWidth(),
+          cornerRadius = 22.dp,
+          contentPadding = PaddingValues(14.dp),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            items(state.searchHistory.take(8)) { term ->
-              AssistChip(
-                onClick = {
-                  keyboard?.hide()
-                  onSearch(term, 1)
-                },
-                label = { Text(term, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                shape = CircleShape,
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Icon(
+                Icons.Rounded.History,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
               )
+              Text("最近搜索", style = MaterialTheme.typography.titleSmall)
             }
-            item {
-              TextButton(onClick = onClearHistory) {
-                Text("清空历史")
-              }
+            Text(
+              text = "清空",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier
+                .clip(CircleShape)
+                .clickable(onClick = onClearHistory)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+          }
+          Spacer(Modifier.height(10.dp))
+          LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.searchHistory) { h ->
+              LiquidGlassChip(
+                label = h.take(22),
+                selected = false,
+                onClick = {
+                  onQueryChange(h)
+                  onSearch(h, 1)
+                },
+              )
             }
           }
         }
       }
     }
 
-    // Loading / Error / Empty / Results
-    if (state.searching) {
+    // Error Banner
+    if (!state.searchError.isNullOrBlank()) {
       item {
-        Box(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-          contentAlignment = Alignment.Center,
+        LiquidGlassCard(
+          modifier = Modifier.fillMaxWidth(),
+          cornerRadius = 20.dp,
+          tint = MaterialTheme.colorScheme.error,
+          contentPadding = PaddingValues(14.dp),
         ) {
-          Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            LoadingIndicator()
-            Spacer(Modifier.height(12.dp))
-            Text("正在检索曲库…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            Text(
+              text = state.searchError,
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
           }
         }
       }
-    } else if (state.searchError != null) {
+    }
+
+    // Loading State
+    if (state.searching) {
       item {
-        Card(
-          shape = MaterialTheme.shapes.large,
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        LiquidGlassCard(
+          modifier = Modifier.fillMaxWidth(),
+          cornerRadius = 26.dp,
+          contentPadding = PaddingValues(vertical = 36.dp),
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            LiquidGlassSpinner(size = 38.dp)
+            Text(
+              "正在搜索曲库…",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      }
+    }
+
+    // Search Results Header + Select All
+    if (state.songs.isNotEmpty() && !state.searching) {
+      item {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
         ) {
           Text(
-            text = state.searchError,
-            modifier = Modifier.padding(18.dp),
-            color = MaterialTheme.colorScheme.onErrorContainer,
+            text = "「${state.lastQuery}」第 ${state.page} 页 · ${state.songs.size} 首",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
+          LiquidGlassChip(
+            label = if (state.selectedMids.size == state.songs.size && state.songs.isNotEmpty()) {
+              "取消全选"
+            } else {
+              "全选本页"
+            },
+            selected = state.selectedMids.isNotEmpty(),
+            onClick = onToggleSelectAll,
           )
         }
       }
-    } else if (state.songs.isEmpty()) {
-      item {
-        Card(
+
+      // Collision-proof composite key prevents LazyColumn crash on duplicate mid results
+      itemsIndexed(state.songs, key = { idx, s -> "${s.mid}_$idx" }) { _, song ->
+        val selected = song.mid in state.selectedMids
+        val coverUrl = song.resolvedCover(state.baseUrl)
+        val badge = song.bestBadge
+        val isFlac = badge == "FLAC"
+        val sizeHint = when (state.quality) {
+          QualityOption.FLAC -> song.sizeFlac.takeIf { it > 0 } ?: song.size320
+          QualityOption.MP3_320 -> song.size320.takeIf { it > 0 } ?: song.size128
+          QualityOption.MP3_128 -> song.size128
+        }
+
+        LiquidGlassCard(
           modifier = Modifier.fillMaxWidth(),
-          shape = MaterialTheme.shapes.extraLarge,
-          colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-          ),
+          cornerRadius = 22.dp,
+          tint = if (selected) MaterialTheme.colorScheme.primary else Color.Unspecified,
+          onClick = { onToggleSelect(song.mid) },
+          contentPadding = PaddingValues(12.dp),
         ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 24.dp, vertical = 40.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Surface(
-              shape = RoundedCornerShape(22.dp),
-              color = MaterialTheme.colorScheme.primaryContainer,
-              modifier = Modifier.size(64.dp),
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                Icon(
-                  Icons.Rounded.MusicNote,
-                  contentDescription = null,
-                  tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                  modifier = Modifier.size(32.dp),
+            // Cover Art with Selection Overlay
+            Box(
+              modifier = Modifier
+                .size(54.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(
+                  Brush.linearGradient(
+                    listOf(
+                      MaterialTheme.colorScheme.primary.copy(alpha = 0.24f),
+                      MaterialTheme.colorScheme.tertiary.copy(alpha = 0.24f),
+                    ),
+                  ),
                 )
+                .border(
+                  width = if (selected) 1.5.dp else 0.75.dp,
+                  color = if (selected) MaterialTheme.colorScheme.primary
+                  else Color.White.copy(alpha = if (isDark) 0.18f else 0.7f),
+                  shape = RoundedCornerShape(15.dp),
+                ),
+              contentAlignment = Alignment.Center,
+            ) {
+              if (!coverUrl.isNullOrBlank()) {
+                AsyncImage(
+                  model = coverUrl,
+                  contentDescription = null,
+                  contentScale = ContentScale.Crop,
+                  modifier = Modifier.fillMaxSize(),
+                )
+              } else {
+                Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+              }
+              if (selected) {
+                Box(
+                  modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(Icons.Rounded.Check, contentDescription = "已选中", tint = Color.White)
+                }
               }
             }
-            Spacer(Modifier.height(14.dp))
-            Text("探索与收藏高品质音乐", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
+
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+              Text(
+                text = song.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = buildString {
+                  append(song.artist.ifBlank { "未知歌手" })
+                  if (song.album.isNotBlank()) append(" · ${song.album}")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                if (badge != "-") {
+                  Text(
+                    text = badge,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isFlac) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                      .clip(RoundedCornerShape(6.dp))
+                      .background(
+                        (if (isFlac) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
+                          .copy(alpha = 0.16f),
+                      )
+                      .padding(horizontal = 6.dp, vertical = 1.dp),
+                  )
+                }
+                if (song.durationText.isNotBlank() && song.durationText != "00:00") {
+                  Text(
+                    text = song.durationText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+                if (sizeHint > 0) {
+                  Text(
+                    text = "≈ ${formatBytes(sizeHint)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+            }
+
+            IconButton(onClick = { onResolve(song) }, modifier = Modifier.size(36.dp)) {
+              Icon(
+                Icons.Rounded.Headphones,
+                contentDescription = "解析试听",
+                tint = MaterialTheme.colorScheme.secondary,
+              )
+            }
+            LiquidGlassButton(
+              onClick = { onDownloadOne(song) },
+              tint = MaterialTheme.colorScheme.primary,
+              height = 36.dp,
+              horizontalPadding = 10.dp,
+            ) {
+              Icon(
+                Icons.Rounded.Download,
+                contentDescription = "下载",
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          }
+        }
+      }
+
+      // Pagination Row
+      item {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          LiquidGlassButton(
+            onClick = { onSearch(state.lastQuery, (state.page - 1).coerceAtLeast(1)) },
+            enabled = state.page > 1,
+            height = 40.dp,
+            horizontalPadding = 16.dp,
+          ) {
+            Text("上一页", style = MaterialTheme.typography.labelLarge)
+          }
+          Text(
+            text = "第 ${state.page} 页",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          LiquidGlassButton(
+            onClick = { onSearch(state.lastQuery, state.page + 1) },
+            enabled = state.hasMore,
+            height = 40.dp,
+            horizontalPadding = 16.dp,
+          ) {
+            Text("下一页", style = MaterialTheme.typography.labelLarge)
+          }
+        }
+      }
+    } else if (!state.searching && state.songs.isEmpty()) {
+      // Friendly Empty Welcome Card
+      item {
+        LiquidGlassCard(
+          modifier = Modifier.fillMaxWidth(),
+          cornerRadius = 28.dp,
+          contentPadding = PaddingValues(vertical = 36.dp, horizontal = 22.dp),
+        ) {
+          Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              Icons.Rounded.MusicNote,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f),
+              modifier = Modifier.size(44.dp),
+            )
+            Text("搜索曲库或粘贴歌曲链接", style = MaterialTheme.typography.titleMedium)
             Text(
-              "支持 QQ 原生直链、会员票据桥与多平台匿名镜像，点击单曲即可多选批量下载",
+              "支持按歌名、歌手检索，或直接粘贴 QQ 音乐分享链接一键加入下载队列。点击卡片可多选批量下载。",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
         }
       }
-    } else {
-      item {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = "第 ${state.page} 页 · ${state.songs.size} 首",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          TextButton(onClick = onToggleSelectAll) {
-            Icon(Icons.Rounded.SelectAll, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text(if (state.selectedMids.size == state.songs.size) "取消全选" else "全选")
-          }
-        }
-      }
-
-      items(state.songs, key = { it.mid }) { song ->
-        val selected = song.mid in state.selectedMids
-        SongExpressiveCard(
-          song = song,
-          baseUrl = state.baseUrl,
-          selected = selected,
-          onClick = { onToggleSelect(song.mid) },
-          onDownload = { onDownloadOne(song) },
-          onResolve = { onResolve(song) },
-        )
-      }
-
-      item {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-          OutlinedButton(
-            onClick = { onSearch(state.lastQuery, state.page - 1) },
-            enabled = state.page > 1 && !state.searching,
-            shape = CircleShape,
-          ) { Text("上一页") }
-          OutlinedButton(
-            onClick = { onSearch(state.lastQuery, state.page + 1) },
-            enabled = state.hasMore && !state.searching,
-            shape = CircleShape,
-          ) { Text("下一页") }
-        }
-      }
     }
-
-    item { Spacer(Modifier.height(84.dp)) }
   }
 
-  // Stream Resolve / Direct Audition Bottom Sheet
+  // Resolve Stream Bottom Sheet
   if (state.resolvingSong != null) {
-    ModalBottomSheet(onDismissRequest = onDismissResolve) {
-      Column(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        Text(state.resolvingSong.name, style = MaterialTheme.typography.titleLarge)
+    ResolveSongSheet(
+      state = state,
+      onDismiss = onDismissResolve,
+      onPlay = onPlayResolved,
+      onDownload = {
+        onDownloadOne(state.resolvingSong)
+        onDismissResolve()
+      },
+    )
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ResolveSongSheet(
+  state: MainUiState,
+  onDismiss: () -> Unit,
+  onPlay: () -> Unit,
+  onDownload: () -> Unit,
+) {
+  val song = state.resolvingSong ?: return
+  val context = LocalContext.current
+  val isDark = LocalLiquidDark.current
+  val sheetBg = if (isDark) Color(0xFF0E1A22) else Color(0xFFF3FAF7)
+
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    containerColor = sheetBg,
+    shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 22.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(song.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
-          "${state.resolvingSong.artist} · ${state.resolvingSong.album}",
-          style = MaterialTheme.typography.bodyMedium,
+          "${song.artist} · ${song.album.ifBlank { "单曲" }}",
+          style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (state.resolvingLoading) {
-          Box(
+      }
+
+      when {
+        state.resolvingLoading -> {
+          Row(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(vertical = 28.dp),
-            contentAlignment = Alignment.Center,
-          ) { LoadingIndicator() }
-        } else if (state.resolveError != null) {
-          Text(state.resolveError, color = MaterialTheme.colorScheme.error)
-        } else if (state.resolveResult != null) {
-          val r = state.resolveResult
-          Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth(),
+              .padding(vertical = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LiquidGlassSpinner(size = 28.dp)
+            Text("正在解析直链音源…", style = MaterialTheme.typography.bodyMedium)
+          }
+        }
+        !state.resolveError.isNullOrBlank() -> {
+          LiquidGlassCard(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 18.dp,
+            tint = MaterialTheme.colorScheme.error,
+          ) {
+            Text(
+              "解析失败：${state.resolveError}",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.error,
+            )
+          }
+        }
+        state.resolveResult != null -> {
+          val res = state.resolveResult
+          LiquidGlassCard(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 20.dp,
+            contentPadding = PaddingValues(14.dp),
+          ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
               Text(
-                "${r.qualityLabel}${if (r.preview) " · 官方60s试听" else ""} · ${r.source}",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
+                "音质：${res.qualityLabel}" +
+                  (if (res.preview) " · 试听片段" else "") +
+                  (if (res.degraded) " · 已自动降级" else ""),
+                style = MaterialTheme.typography.titleSmall,
               )
-              if (r.expectedSize > 0) {
-                Text("大小：${formatBytes(r.expectedSize)}", style = MaterialTheme.typography.bodySmall)
-              }
               Text(
-                r.url,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                "来源：${res.source.ifBlank { "默认引擎" }}" +
+                  if (res.expectedSize > 0) " · 预计大小 ${formatBytes(res.expectedSize)}" else "",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
+              if (res.messages.isNotEmpty()) {
+                Text(
+                  res.messages.joinToString("\n"),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
           }
+
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            Button(
-              onClick = {
-                onPlayResolved()
-                onDismissResolve()
-              },
+            LiquidGlassButton(
+              onClick = onPlay,
+              tint = MaterialTheme.colorScheme.primary,
               modifier = Modifier.weight(1f),
-              shape = CircleShape,
             ) {
-              Icon(Icons.Rounded.PlayArrow, null)
-              Spacer(Modifier.width(4.dp))
-              Text("在线试听")
+              Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(18.dp))
+              Text("在线试听", color = Color.White, style = MaterialTheme.typography.labelLarge)
             }
-            FilledTonalButton(
-              onClick = {
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("qmdl-url", r.url))
-              },
-              shape = CircleShape,
+            LiquidGlassButton(
+              onClick = onDownload,
+              modifier = Modifier.weight(1f),
             ) {
-              Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(18.dp))
-              Spacer(Modifier.width(4.dp))
-              Text("复制直链")
+              Icon(Icons.Rounded.Download, null, modifier = Modifier.size(18.dp))
+              Text("加入下载", style = MaterialTheme.typography.labelLarge)
             }
           }
-          OutlinedButton(
+
+          LiquidGlassButton(
             onClick = {
-              onDownloadOne(state.resolvingSong)
-              onDismissResolve()
+              val cm = context.getSystemService(ClipboardManager::class.java)
+              if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText("qmdl_url", res.url))
+                Toast.makeText(context, "直链已复制到剪贴板", Toast.LENGTH_SHORT).show()
+              }
             },
             modifier = Modifier.fillMaxWidth(),
-            shape = CircleShape,
           ) {
-            Icon(Icons.Rounded.Download, null)
-            Spacer(Modifier.width(6.dp))
-            Text("加入下载队列")
-          }
-        }
-        Spacer(Modifier.height(18.dp))
-      }
-    }
-  }
-}
-
-@Composable
-private fun SongExpressiveCard(
-  song: SongItem,
-  baseUrl: String,
-  selected: Boolean,
-  onClick: () -> Unit,
-  onDownload: () -> Unit,
-  onResolve: () -> Unit,
-) {
-  Card(
-    modifier = Modifier
-      .fillMaxWidth()
-      .clip(MaterialTheme.shapes.large)
-      .clickable(onClick = onClick),
-    shape = MaterialTheme.shapes.large,
-    colors = CardDefaults.cardColors(
-      containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f)
-      else MaterialTheme.colorScheme.surfaceContainer,
-    ),
-    border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-      Box(
-        modifier = Modifier
-          .size(54.dp)
-          .clip(RoundedCornerShape(16.dp))
-          .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-        contentAlignment = Alignment.Center,
-      ) {
-        val cover = song.resolvedCover(baseUrl)
-        if (cover != null) {
-          AsyncImage(
-            model = cover,
-            contentDescription = song.album,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-          )
-        } else {
-          Icon(
-            Icons.Rounded.MusicNote,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        androidx.compose.animation.AnimatedVisibility(visible = selected) {
-          Box(
-            modifier = Modifier
-              .fillMaxSize()
-              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              Icons.Rounded.CheckCircle,
-              contentDescription = "已选",
-              tint = MaterialTheme.colorScheme.onPrimary,
-            )
+            Icon(Icons.Rounded.ContentCopy, null, modifier = Modifier.size(17.dp))
+            Text("复制音频直链", style = MaterialTheme.typography.labelLarge)
           }
         }
       }
 
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-          text = song.name,
-          style = MaterialTheme.typography.titleMedium,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          text = listOf(song.artist, song.album).filter { it.isNotBlank() }.joinToString(" · "),
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          QualityBadgePill(song.bestBadge)
-          Text(
-            text = song.durationText,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-      }
-
-      IconButton(onClick = onResolve) {
-        Icon(Icons.Rounded.PlayArrow, contentDescription = "试听/直链")
-      }
-      FilledTonalIconButton(onClick = onDownload) {
-        Icon(Icons.Rounded.Download, contentDescription = "下载")
-      }
+      Spacer(Modifier.height(20.dp))
     }
-  }
-}
-
-@Composable
-private fun QualityBadgePill(badge: String) {
-  if (badge == "-") return
-  val (bg, fg) = when (badge) {
-    "FLAC" -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
-    "320k" -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
-    else -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-  }
-  Surface(shape = RoundedCornerShape(6.dp), color = bg) {
-    Text(
-      text = badge,
-      modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-      style = MaterialTheme.typography.labelSmall,
-      fontWeight = FontWeight.Bold,
-      color = fg,
-    )
   }
 }

@@ -9,6 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.io.InputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -274,6 +275,17 @@ class QmdlApiClient(
     http.newCall(req).execute().use { resp ->
       if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
       resp.body?.bytes() ?: throw IOException("空响应")
+    }
+  }
+
+  suspend fun <T> streamTo(url: String, consumer: suspend (InputStream) -> T): T = withContext(Dispatchers.IO) {
+    val req = Request.Builder().url(url).get().build()
+    http.newCall(req).execute().use { resp ->
+      if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+      val body = resp.body ?: throw IOException("空响应")
+      body.byteStream().use { input ->
+        consumer(input)
+      }
     }
   }
 

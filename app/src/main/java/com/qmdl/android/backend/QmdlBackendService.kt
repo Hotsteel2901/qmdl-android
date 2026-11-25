@@ -22,29 +22,51 @@ class QmdlBackendService : Service() {
     super.onCreate()
     ensureChannel()
     val notification = buildNotification("内置下载引擎运行中")
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      startForeground(
-        NOTIFICATION_ID,
-        notification,
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-      )
-    } else {
-      startForeground(NOTIFICATION_ID, notification)
+    val started = runCatching {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(
+          NOTIFICATION_ID,
+          notification,
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
+      } else {
+        startForeground(NOTIFICATION_ID, notification)
+      }
+    }.isSuccess
+    if (!started) {
+      // Android 12-16 may block background FGS starts; stop gracefully instead of crashing
+      stopSelf()
     }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
-      (application as QmdlApp).backendManager.stopLocal()
-      stopForeground(STOP_FOREGROUND_REMOVE)
+      (application as? QmdlApp)?.backendManager?.stopLocal()
+      runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
       stopSelf()
       return START_NOT_STICKY
     }
-    val app = application as QmdlApp
-    if (!app.prefs.useRemoteBackend) {
+    val app = application as? QmdlApp
+    if (app != null && !app.prefs.useRemoteBackend) {
       app.backendManager.startLocal(app.prefs.quality.slug, app.prefs.mirror.slug)
     }
-    return START_STICKY
+    // START_NOT_STICKY prevents Android 12+ ForegroundServiceStartNotAllowedException on OS restart
+    return START_NOT_STICKY
+  }
+
+  /**
+   * Required on Android 15/16 (targetSdk 35+) for foregroundServiceType="dataSync":
+   * when the 6-hour OS quota expires, gracefully stop the service instead of throwing RemoteServiceException.
+   */
+  override fun onTimeout(startId: Int, fgsType: Int) {
+    (application as? QmdlApp)?.backendManager?.stopLocal()
+    runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+    stopSelf(startId)
+  }
+
+  override fun onDestroy() {
+    runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+    super.onDestroy()
   }
 
   override fun onBind(intent: Intent?): IBinder? = null

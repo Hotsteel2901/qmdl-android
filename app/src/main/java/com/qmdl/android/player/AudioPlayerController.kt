@@ -2,15 +2,18 @@ package com.qmdl.android.player
 
 import android.content.Context
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -29,11 +32,14 @@ data class PlayerUiState(
   val isBuffering: Boolean = false,
   val positionMs: Long = 0L,
   val durationMs: Long = 0L,
+  val error: String? = null,
 )
 
 class AudioPlayerController(context: Context) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private val exoPlayer: ExoPlayer = ExoPlayer.Builder(context.applicationContext).build()
+  @Volatile
+  private var released = false
 
   private val _state = MutableStateFlow(PlayerUiState())
   val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -41,27 +47,56 @@ class AudioPlayerController(context: Context) {
   init {
     exoPlayer.addListener(object : Player.Listener {
       override fun onIsPlayingChanged(isPlaying: Boolean) {
-        _state.value = _state.value.copy(isPlaying = isPlaying)
+        _state.update { it.copy(isPlaying = isPlaying, error = if (isPlaying) null else it.error) }
       }
 
       override fun onPlaybackStateChanged(playbackState: Int) {
-        _state.value = _state.value.copy(
-          isBuffering = playbackState == Player.STATE_BUFFERING,
-          durationMs = exoPlayer.duration.coerceAtLeast(0L),
-        )
+        _state.update {
+          it.copy(
+            isBuffering = playbackState == Player.STATE_BUFFERING,
+            durationMs = runCatching { exoPlayer.duration.coerceAtLeast(0L) }.getOrDefault(it.durationMs),
+          )
+        }
         if (playbackState == Player.STATE_ENDED && _state.value.playlist.size > 1) {
           next()
+        }
+      }
+
+      override fun onPlayerError(error: PlaybackException) {
+        val friendly = when (error.errorCode) {
+          PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+          PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+          -> "网络连接超时，音频加载失败"
+          PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "音频链接已失效或无访问权限"
+          PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+          PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+          -> "当前音频格式不受设备解码器支持"
+          else -> error.localizedMessage?.takeIf { it.isNotBlank() } ?: "播放失败，请重试"
+        }
+        _state.update {
+          it.copy(
+            isPlaying = false,
+            isBuffering = false,
+            error = friendly,
+          )
         }
       }
     })
     scope.launch {
       while (isActive) {
-        if (_state.value.current != null) {
-          _state.value = _state.value.copy(
-            positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
-            durationMs = exoPlayer.duration.coerceAtLeast(0L),
-            isPlaying = exoPlayer.isPlaying,
-          )
+        if (!released && _state.value.current != null) {
+          runCatching {
+            val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val dur = exoPlayer.duration.coerceAtLeast(0L)
+            val playing = exoPlayer.isPlaying
+            _state.update {
+              it.copy(
+                positionMs = pos,
+                durationMs = dur,
+                isPlaying = playing,
+              )
+            }
+          }
         }
         delay(350)
       }
@@ -69,30 +104,65 @@ class AudioPlayerController(context: Context) {
   }
 
   fun playQueue(tracks: List<PlayTrack>, startIndex: Int = 0) {
-    if (tracks.isEmpty()) return
+    if (tracks.isEmpty() || released) return
     val idx = startIndex.coerceIn(0, tracks.lastIndex)
     val track = tracks[idx]
-    _state.value = _state.value.copy(
-      current = track,
-      playlist = tracks,
-      currentIndex = idx,
-      positionMs = 0L,
-      durationMs = 0L,
-    )
-    exoPlayer.setMediaItem(MediaItem.fromUri(track.url))
-    exoPlayer.prepare()
-    exoPlayer.playWhenReady = true
+    scope.launch {
+      if (released) return@launch
+      _state.value = PlayerUiState(
+        current = track,
+        playlist = tracks,
+        currentIndex = idx,
+        isBuffering = true,
+        positionMs = 0L,
+        durationMs = 0L,
+        error = null,
+      )
+      runCatching {
+        exoPlayer.setMediaItem(MediaItem.fromUri(track.url))
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
+      }.onFailure { e ->
+        _state.update {
+          it.copy(
+            isBuffering = false,
+            isPlaying = false,
+            error = e.message ?: "无法加载音频",
+          )
+        }
+      }
+    }
   }
 
   fun playSingle(track: PlayTrack) = playQueue(listOf(track), 0)
 
   fun togglePlayPause() {
-    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+    if (released) return
+    scope.launch {
+      if (released) return@launch
+      runCatching {
+        if (exoPlayer.isPlaying) {
+          exoPlayer.pause()
+        } else {
+          if (_state.value.error != null) {
+            exoPlayer.prepare()
+          }
+          exoPlayer.play()
+        }
+      }
+    }
   }
 
   fun seekTo(ms: Long) {
-    exoPlayer.seekTo(ms.coerceAtLeast(0L))
-    _state.value = _state.value.copy(positionMs = ms.coerceAtLeast(0L))
+    if (released) return
+    val target = ms.coerceAtLeast(0L)
+    scope.launch {
+      if (released) return@launch
+      runCatching {
+        exoPlayer.seekTo(target)
+        _state.update { it.copy(positionMs = target) }
+      }
+    }
   }
 
   fun next() {
@@ -109,12 +179,23 @@ class AudioPlayerController(context: Context) {
   }
 
   fun stopAndDismiss() {
-    exoPlayer.stop()
-    exoPlayer.clearMediaItems()
-    _state.value = PlayerUiState()
+    if (released) return
+    scope.launch {
+      if (released) return@launch
+      runCatching {
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+      }
+      _state.value = PlayerUiState()
+    }
   }
 
   fun release() {
-    exoPlayer.release()
+    if (released) return
+    released = true
+    scope.launch {
+      runCatching { exoPlayer.release() }
+      scope.cancel()
+    }
   }
 }
