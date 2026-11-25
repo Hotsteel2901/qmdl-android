@@ -1,0 +1,73 @@
+name: Android Build & Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run unit tests & build Debug + Release APKs
+        run: ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace
+
+      - name: Prepare renamed APKs
+        run: |
+          mkdir -p release-apks
+          cp app/build/outputs/apk/release/app-release.apk release-apks/qmdl-android-v2.0.0-release.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-apks/qmdl-android-v2.0.0-debug.apk
+          ls -lh release-apks/
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qmdl-android-apks
+          path: release-apks/*.apk
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "QMDL Android ${{ github.ref_name }} · Liquid Glass"
+          generate_release_notes: false
+          body: |
+            ## QMDL Android ${{ github.ref_name }} — 完整 Liquid Glass 液态玻璃版
+
+            ### 视觉与交互全面升级
+            - 接入 `AndroidLiquidGlass`（`io.github.kyant0:backdrop:2.0.1` + `shapes:1.2.1`），实现双层实时光学折射、高斯模糊、色散光晕与高光边缘
+            - 全面重构探索、队列、曲库、设置与迷你/展开播放器，配备可拖拽折射液态玻璃底栏与液态玻璃开关
+            - 新增下载队列三栏统计、实时进度百分比与预计剩余时间（ETA）、一键重试失败任务、曲库格式筛选及剪贴板一键粘贴搜索
+
+            ### 闪退与稳定性修复
+            - 修复 Android 12–16 前台服务后台重启与 `dataSync` 6 小时 `onTimeout` 闪退
+            - 升级系统音乐库导出为 16KB 分块流式拷贝，消除无损 FLAC 导出 OOM 闪退
+            - 修复探索/曲库/队列列表重复键崩溃、ExoPlayer 播放错误回调与主线程保护、后端停止阻塞主线程 ANR 及并发轮询堆积
+            - 后端 CLI 二进制与构建脚本保持原样未改动
+          files: |
+            release-apks/qmdl-android-v2.0.0-release.apk
+            release-apks/qmdl-android-v2.0.0-debug.apk
